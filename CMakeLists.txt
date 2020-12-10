@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.13)
 # The version of CMake which is not compatible with the old CUDA CMake commands.
 set(CMAKE_VERSION_THRESHOLD "3.15.0")
 
-project(onnx2trt LANGUAGES CXX C)
+project(onnx2trt LANGUAGES CXX C CUDA)
 
 set(ONNX2TRT_ROOT ${PROJECT_SOURCE_DIR})
 # Set C++11 as standard for the whole project
@@ -110,6 +110,7 @@ if(NOT TARGET onnx_proto)
   add_definitions("-DONNX_NAMESPACE=${ONNX_NAMESPACE}")
   add_subdirectory(third_party/onnx EXCLUDE_FROM_ALL)
 endif()
+
 
 set(TENSORRT_ROOT /home/std/Downloads/installer/TensorRT-7.2.1.6_cuda-11.0.cudnn8.0)
 
