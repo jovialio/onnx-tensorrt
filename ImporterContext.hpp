@@ -35,6 +35,7 @@ class ImporterContext final : public IImporterContext
 {
     nvinfer1::INetworkDefinition* _network;
     nvinfer1::ILogger* _logger;
+    std::list<UniqueOwnable> _owned_plugin_instances;
     std::list<std::vector<uint8_t>> _temp_bufs;
     StringMap<nvinfer1::ITensor*> _user_inputs;
     StringMap<nvinfer1::ITensor**> _user_outputs;
@@ -237,6 +238,19 @@ public:
             assert(_opsets.count(domain));
             return _opsets.at(domain);
         }
+    }
+
+    virtual nvinfer1::IPluginLayer* addPlugin(Plugin* plugin,
+                                              std::vector<nvinfer1::ITensor*> const& inputs) override {
+      // Note: Plugins are wrapped here to make them work with
+      // onnx2trt::PluginFactory.
+      auto* wrapped_plugin = new TypeSerializingPlugin(plugin);
+      _owned_plugin_instances.emplace_back(wrapped_plugin);
+  #if NV_TENSORRT_MAJOR < 4
+      return _network->addPlugin(inputs.data(), inputs.size(), *wrapped_plugin);
+  #else
+      return _network->addPluginExt(inputs.data(), inputs.size(), *wrapped_plugin);
+  #endif
     }
 private:
     std::string generateUniqueName(std::set<std::string>& namesSet, const std::string& basename)

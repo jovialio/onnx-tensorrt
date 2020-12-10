@@ -26,6 +26,8 @@
 #include "ShapedWeights.hpp"
 #include "Status.hpp"
 #include "TensorOrWeights.hpp"
+#include "plugin.hpp"
+
 
 #include <NvInfer.h>
 #include <functional>
@@ -49,8 +51,9 @@ class IImporterContext;
 //         Can't use ::onnx::NodeProto
 //         Can't use std::function
 typedef ValueOrStatus<std::vector<TensorOrWeights>> NodeImportResult;
-typedef std::function<NodeImportResult(
-    IImporterContext* ctx, ::ONNX_NAMESPACE::NodeProto const& node, std::vector<TensorOrWeights>& inputs)>
+typedef std::function<NodeImportResult(IImporterContext* ctx,
+                                       ::ONNX_NAMESPACE::NodeProto const& node,
+                                       std::vector<TensorOrWeights>& inputs)>
     NodeImporter;
 
 template <typename T>
@@ -72,6 +75,7 @@ public:
     virtual void registerTensor(TensorOrWeights tensor, const std::string& basename) = 0;
     virtual void registerLayer(nvinfer1::ILayer* layer, const std::string& basename) = 0;
     virtual ShapedWeights createTempWeights(ShapedWeights::DataType type, nvinfer1::Dims shape) = 0;
+    virtual nvinfer1::IPluginLayer* addPlugin(Plugin* plugin, std::vector<nvinfer1::ITensor*> const& inputs) = 0;
     virtual int64_t getOpsetVersion(const char* domain = "") const = 0;
     virtual nvinfer1::ILogger& logger() = 0;
     virtual void insertRefitMap(std::string weightsName, std::string layerName, nvinfer1::WeightsRole role) = 0;

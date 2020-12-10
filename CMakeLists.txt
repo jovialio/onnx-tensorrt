@@ -19,6 +19,9 @@
  # DEALINGS IN THE SOFTWARE.
 
 cmake_minimum_required(VERSION 3.13)
+# The version of CMake which is not compatible with the old CUDA CMake commands.
+set(CMAKE_VERSION_THRESHOLD "3.15.0")
+
 project(onnx2trt LANGUAGES CXX C)
 
 set(ONNX2TRT_ROOT ${PROJECT_SOURCE_DIR})
@@ -48,6 +51,12 @@ set(ONNX2TRT_PATCH 1)
 #--------------------------------------------------
 # Build configurations, global to all projects
 #--------------------------------------------------
+
+set(PLUGIN_SOURCES
+  dcn_v2_im2col_cuda.cu
+  DCNv2.cpp
+  plugin.cpp
+  )
 
 set(IMPORTER_SOURCES
   NvOnnxParser.cpp
@@ -102,6 +111,8 @@ if(NOT TARGET onnx_proto)
   add_subdirectory(third_party/onnx EXCLUDE_FROM_ALL)
 endif()
 
+set(TENSORRT_ROOT /home/std/Downloads/installer/TensorRT-7.2.1.6_cuda-11.0.cudnn8.0)
+
 # TensorRT
 find_path(TENSORRT_INCLUDE_DIR NvInfer.h
   HINTS ${TENSORRT_ROOT} ${CUDA_TOOLKIT_ROOT_DIR}
@@ -131,59 +142,73 @@ if(NOT TENSORRT_FOUND)
 endif()
 
 # --------------------------------
+# Plugin library
+# --------------------------------
+list(APPEND CUDA_NVCC_FLAGS "-Xcompiler -fPIC --expt-extended-lambda")
+if(${CMAKE_VERSION} VERSION_LESS ${CMAKE_VERSION_THRESHOLD})
+  CUDA_INCLUDE_DIRECTORIES(${CUDNN_INCLUDE_DIR} ${TENSORRT_INCLUDE_DIR})
+  CUDA_ADD_LIBRARY(nvonnxparser_plugin STATIC ${PLUGIN_SOURCES})
+else()
+  include_directories(${CUDNN_INCLUDE_DIR} ${TENSORRT_INCLUDE_DIR})
+  add_library(nvonnxparser_plugin STATIC ${PLUGIN_SOURCES})
+endif()
+target_include_directories(nvonnxparser_plugin PUBLIC ${CUDA_INCLUDE_DIRS} ${ONNX_INCLUDE_DIRS} ${TENSORRT_INCLUDE_DIR} ${CUDNN_INCLUDE_DIR})
+target_link_libraries(nvonnxparser_plugin ${TENSORRT_LIBRARY} cuda cudart cublas)
+
+# --------------------------------
 # Importer library
 # --------------------------------
 add_library(nvonnxparser SHARED ${IMPORTER_SOURCES})
 target_include_directories(nvonnxparser PUBLIC ${ONNX_INCLUDE_DIRS} ${TENSORRT_INCLUDE_DIR})
-target_link_libraries(nvonnxparser PUBLIC onnx_proto ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY})
-set_target_properties(nvonnxparser PROPERTIES
-  VERSION   ${ONNX2TRT_MAJOR}.${ONNX2TRT_MINOR}.${ONNX2TRT_PATCH}
-  SOVERSION ${ONNX2TRT_MAJOR}
-  LINK_DEPENDS ${PARSER_LINKER_SCRIPT}
-  LINK_FLAGS "-Wl,--version-script=${PARSER_LINKER_SCRIPT}"
-)
-add_library(nvonnxparser_static STATIC ${IMPORTER_SOURCES})
-target_include_directories(nvonnxparser_static PUBLIC ${ONNX_INCLUDE_DIRS} ${TENSORRT_INCLUDE_DIR})
-target_link_libraries(nvonnxparser_static PUBLIC onnx_proto ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY})
+target_link_libraries(nvonnxparser PUBLIC onnx_proto nvonnxparser_plugin ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY})
+#set_target_properties(nvonnxparser PROPERTIES
+#  VERSION   ${ONNX2TRT_MAJOR}.${ONNX2TRT_MINOR}.${ONNX2TRT_PATCH}
+#  SOVERSION ${ONNX2TRT_MAJOR}
+#  LINK_DEPENDS ${PARSER_LINKER_SCRIPT}
+#  LINK_FLAGS "-Wl,--version-script=${PARSER_LINKER_SCRIPT}"
+#)
+#add_library(nvonnxparser_static STATIC ${IMPORTER_SOURCES})
+#target_include_directories(nvonnxparser_static PUBLIC ${ONNX_INCLUDE_DIRS} ${TENSORRT_INCLUDE_DIR})
+#target_link_libraries(nvonnxparser_static PUBLIC onnx_proto nvonnxparser_plugin ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY})
 
 # --------------------------------
 # Onnxifi library
 # --------------------------------
-if(BUILD_ONNXIFI)
-  add_library(trt_onnxify SHARED ${ONNXIFI_SOURCES})
-  target_include_directories(trt_onnxify PUBLIC ${CUDA_INCLUDE_DIR} ${ONNX_INCLUDE_DIRS} ${TENSORRT_INCLUDE_DIR})
-  target_link_libraries(trt_onnxify PUBLIC nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS})
-endif()
+#if(BUILD_ONNXIFI)
+#  add_library(trt_onnxify SHARED ${ONNXIFI_SOURCES})
+#  target_include_directories(trt_onnxify PUBLIC ${CUDA_INCLUDE_DIR} ${ONNX_INCLUDE_DIRS} ${TENSORRT_INCLUDE_DIR})
+#  target_link_libraries(trt_onnxify PUBLIC nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS})
+#endif()
 
 # --------------------------------
 # Converter executable
 # --------------------------------
-add_executable(onnx2trt ${EXECUTABLE_SOURCES})
-target_include_directories(onnx2trt PUBLIC ${ONNX_INCLUDE_DIRS})
-target_link_libraries(onnx2trt PUBLIC ${PROTOBUF_LIB} onnx nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS}) #${CUDA_LIBRARIES} 
+#add_executable(onnx2trt ${EXECUTABLE_SOURCES})
+#target_include_directories(onnx2trt PUBLIC ${ONNX_INCLUDE_DIRS})
+#target_link_libraries(onnx2trt PUBLIC ${PROTOBUF_LIB} onnx nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS}) #${CUDA_LIBRARIES}
 
 # --------------------------------
 # API Tests
 # --------------------------------
-add_executable(getSupportedAPITest ${API_TESTS_SOURCES})
-target_include_directories(getSupportedAPITest PUBLIC ${ONNX_INCLUDE_DIRS} ${CUDNN_INCLUDE_DIR})
-target_link_libraries(getSupportedAPITest PUBLIC ${PROTOBUF_LIB} nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS}) #${CUDA_LIBRARIES} 
+#add_executable(getSupportedAPITest ${API_TESTS_SOURCES})
+#target_include_directories(getSupportedAPITest PUBLIC ${ONNX_INCLUDE_DIRS} ${CUDNN_INCLUDE_DIR})
+#target_link_libraries(getSupportedAPITest PUBLIC ${PROTOBUF_LIB} nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS}) #${CUDA_LIBRARIES}
 
 # --------------------------------
 # Installation
 # --------------------------------
-install(TARGETS
-                onnx2trt
-                nvonnxparser
-                nvonnxparser_static
-        RUNTIME DESTINATION bin
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-)
+#install(TARGETS
+#                onnx2trt
+#                nvonnxparser
+#                nvonnxparser_static
+#        RUNTIME DESTINATION bin
+#        LIBRARY DESTINATION lib
+#        ARCHIVE DESTINATION lib
+#)
 
-install(FILES ${HEADERS}
-  DESTINATION include
-)
+#install(FILES ${HEADERS}
+#  DESTINATION include
+#)
 
 SET(CPACK_GENERATOR "DEB")
 SET(CPACK_DEBIAN_PACKAGE_MAINTAINER "Mike Houston") #required

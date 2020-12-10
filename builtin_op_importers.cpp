@@ -28,6 +28,8 @@
 #include "onnx2trt_utils.hpp"
 #include "LoopHelpers.hpp"
 #include "RNNHelpers.hpp"
+#include "plugin.hpp"
+#include "DCNv2.hpp"
 
 #include <algorithm> // For std::min, std::max
 #include <array>
@@ -4219,6 +4221,42 @@ DEFINE_BUILTIN_OP_IMPORTER(TRT_MaxPool)
 DEFINE_BUILTIN_OP_IMPORTER(TRT_AveragePool)
 {
     return importAveragePool(ctx, node, inputs);
+}
+
+DEFINE_BUILTIN_OP_IMPORTER(DCNv2) {
+    ASSERT(inputs.at(0).is_tensor(),  ErrorCode::kUNSUPPORTED_NODE); // input
+    ASSERT(inputs.at(1).is_tensor(), ErrorCode::kUNSUPPORTED_NODE); // offset
+    ASSERT(inputs.at(2).is_tensor(), ErrorCode::kUNSUPPORTED_NODE); // mask
+    ASSERT(inputs.at(3).is_weights(), ErrorCode::kUNSUPPORTED_NODE); // weight
+
+    auto kernel_weights = inputs.at(3).weights();
+    nvinfer1::Weights bias_weights;
+    if( inputs.size() == 5 ) {
+        ASSERT(inputs.at(4).is_weights(), ErrorCode::kUNSUPPORTED_NODE);
+        auto shaped_bias_weights = inputs.at(4).weights();
+        ASSERT(shaped_bias_weights.shape.nbDims == 1, ErrorCode::kINVALID_NODE);
+        ASSERT(shaped_bias_weights.shape.d[0] == kernel_weights.shape.d[0], ErrorCode::kINVALID_NODE);
+        bias_weights = shaped_bias_weights;
+    } else {
+        bias_weights = ShapedWeights::empty(kernel_weights.type);
+    }
+    int out_channel,in_channel,kernel_H,kernel_W,deformable_group,dilation,groups,padding,stride;
+    out_channel = kernel_weights.shape.d[0];
+    in_channel = kernel_weights.shape.d[1];
+    kernel_H = kernel_weights.shape.d[2];
+    kernel_W = kernel_weights.shape.d[3];
+
+    OnnxAttrs attrs(node, ctx);
+    deformable_group = attrs.get("deformable_group", 1);
+    dilation = attrs.get("dilation", 1);
+    groups = attrs.get("groups", 1);
+    padding = attrs.get("padding", 1);
+    stride = attrs.get("stride", 1);
+    RETURN_FIRST_OUTPUT(
+            ctx->addPlugin(
+                    new DCNv2Plugin(in_channel,out_channel,kernel_H,kernel_W,deformable_group,
+                            dilation,groups,padding,stride, kernel_weights, bias_weights),
+                    {&inputs.at(0).tensor(),&inputs.at(1).tensor(),&inputs.at(2).tensor()}));
 }
 
 } // namespace
