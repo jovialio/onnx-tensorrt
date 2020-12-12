@@ -4223,11 +4223,41 @@ DEFINE_BUILTIN_OP_IMPORTER(TRT_AveragePool)
     return importAveragePool(ctx, node, inputs);
 }
 
-DEFINE_BUILTIN_OP_IMPORTER(DCNv2) {
-    ASSERT(inputs.at(0).is_tensor(),  ErrorCode::kUNSUPPORTED_NODE); // input
+nvinfer1::IPluginV2* importPluginFromRegistry(IImporterContext* ctx,
+                                              const std::string& pluginName,
+                                              const std::string& pluginVersion,
+                                              const std::string& nodeName,
+                                              const std::vector<nvinfer1::PluginField>& pluginFields)
+{
+    const auto mPluginRegistry = getPluginRegistry();
+    const auto pluginCreator = mPluginRegistry->getPluginCreator(pluginName.c_str(), pluginVersion.c_str(), "ONNXTRT_NAMESPACE");
+
+    if (!pluginCreator)
+    {
+        return nullptr;
+    }
+
+    nvinfer1::PluginFieldCollection fc;
+    fc.nbFields = pluginFields.size();
+    fc.fields = pluginFields.data();
+
+    return pluginCreator->createPlugin(nodeName.c_str(), &fc);
+}
+
+
+DEFINE_BUILTIN_OP_IMPORTER(DCNv2)
+{
+    ASSERT(inputs.at(0).is_tensor(), ErrorCode::kUNSUPPORTED_NODE); // input
     ASSERT(inputs.at(1).is_tensor(), ErrorCode::kUNSUPPORTED_NODE); // offset
     ASSERT(inputs.at(2).is_tensor(), ErrorCode::kUNSUPPORTED_NODE); // mask
     ASSERT(inputs.at(3).is_weights(), ErrorCode::kUNSUPPORTED_NODE); // weight
+
+    std::vector<nvinfer1::ITensor*> tensors;
+    for (auto& input : inputs)
+    {
+        if(input.is_tensor())
+            tensors.push_back(&input.tensor());
+    }
 
     auto kernel_weights = inputs.at(3).weights();
     nvinfer1::Weights bias_weights;
@@ -4236,10 +4266,12 @@ DEFINE_BUILTIN_OP_IMPORTER(DCNv2) {
         auto shaped_bias_weights = inputs.at(4).weights();
         ASSERT(shaped_bias_weights.shape.nbDims == 1, ErrorCode::kINVALID_NODE);
         ASSERT(shaped_bias_weights.shape.d[0] == kernel_weights.shape.d[0], ErrorCode::kINVALID_NODE);
+
         bias_weights = shaped_bias_weights;
     } else {
         bias_weights = ShapedWeights::empty(kernel_weights.type);
     }
+
     int out_channel,in_channel,kernel_H,kernel_W,deformable_group,dilation,groups,padding,stride;
     out_channel = kernel_weights.shape.d[0];
     in_channel = kernel_weights.shape.d[1];
@@ -4252,12 +4284,70 @@ DEFINE_BUILTIN_OP_IMPORTER(DCNv2) {
     groups = attrs.get("groups", 1);
     padding = attrs.get("padding", 1);
     stride = attrs.get("stride", 1);
-    RETURN_FIRST_OUTPUT(
-            ctx->addPlugin(
-                    new DCNv2Plugin(in_channel,out_channel,kernel_H,kernel_W,deformable_group,
-                            dilation,groups,padding,stride, kernel_weights, bias_weights),
-                    {&inputs.at(0).tensor(),&inputs.at(1).tensor(),&inputs.at(2).tensor()}));
+
+    // Populate instanceNormalization plugin properties.
+    const std::string pluginName = "DCNv2";
+    const std::string pluginVersion = "001";
+    std::vector<nvinfer1::PluginField> f;
+
+    f.emplace_back("in_channel", &in_channel, nvinfer1::PluginFieldType::kINT32, 1);
+    f.emplace_back("out_channel", &out_channel, nvinfer1::PluginFieldType::kINT32, 1);
+    f.emplace_back("kernel_H", &kernel_H, nvinfer1::PluginFieldType::kINT32, 1);
+    f.emplace_back("kernel_W", &kernel_W, nvinfer1::PluginFieldType::kINT32, 1);
+    f.emplace_back("deformable_group", &deformable_group, nvinfer1::PluginFieldType::kINT32, 1);
+    f.emplace_back("dilation", &dilation, nvinfer1::PluginFieldType::kINT32, 1);
+    f.emplace_back("groups", &groups, nvinfer1::PluginFieldType::kINT32, 1);
+    f.emplace_back("padding", &padding, nvinfer1::PluginFieldType::kINT32, 1);
+    f.emplace_back("stride", &stride, nvinfer1::PluginFieldType::kINT32, 1);
+
+    f.emplace_back("h_weight", kernel_weights.values, nvinfer1::PluginFieldType::kFLOAT32, kernel_weights.count());
+    f.emplace_back("h_bias", bias_weights.values, nvinfer1::PluginFieldType::kFLOAT32, bias_weights.count);
+
+    // Create plugin from registry
+    nvinfer1::IPluginV2* plugin = importPluginFromRegistry(ctx, pluginName, pluginVersion, node.name(), f);
+
+    ASSERT(plugin != nullptr && "dcn_v2 plugin was not found in the plugin registry!",
+        ErrorCode::kUNSUPPORTED_NODE);
+
+    RETURN_FIRST_OUTPUT(ctx->network()->addPluginV2(tensors.data(), tensors.size(), *plugin));
 }
+
+
+//DEFINE_BUILTIN_OP_IMPORTER(DCNv2) {
+//    ASSERT(inputs.at(0).is_tensor(),  ErrorCode::kUNSUPPORTED_NODE); // input
+//    ASSERT(inputs.at(1).is_tensor(), ErrorCode::kUNSUPPORTED_NODE); // offset
+//    ASSERT(inputs.at(2).is_tensor(), ErrorCode::kUNSUPPORTED_NODE); // mask
+//    ASSERT(inputs.at(3).is_weights(), ErrorCode::kUNSUPPORTED_NODE); // weight
+
+//    auto kernel_weights = inputs.at(3).weights();
+//    nvinfer1::Weights bias_weights;
+//    if( inputs.size() == 5 ) {
+//        ASSERT(inputs.at(4).is_weights(), ErrorCode::kUNSUPPORTED_NODE);
+//        auto shaped_bias_weights = inputs.at(4).weights();
+//        ASSERT(shaped_bias_weights.shape.nbDims == 1, ErrorCode::kINVALID_NODE);
+//        ASSERT(shaped_bias_weights.shape.d[0] == kernel_weights.shape.d[0], ErrorCode::kINVALID_NODE);
+//        bias_weights = shaped_bias_weights;
+//    } else {
+//        bias_weights = ShapedWeights::empty(kernel_weights.type);
+//    }
+//    int out_channel,in_channel,kernel_H,kernel_W,deformable_group,dilation,groups,padding,stride;
+//    out_channel = kernel_weights.shape.d[0];
+//    in_channel = kernel_weights.shape.d[1];
+//    kernel_H = kernel_weights.shape.d[2];
+//    kernel_W = kernel_weights.shape.d[3];
+
+//    OnnxAttrs attrs(node, ctx);
+//    deformable_group = attrs.get("deformable_group", 1);
+//    dilation = attrs.get("dilation", 1);
+//    groups = attrs.get("groups", 1);
+//    padding = attrs.get("padding", 1);
+//    stride = attrs.get("stride", 1);
+//    RETURN_FIRST_OUTPUT(
+//            ctx->addPlugin(
+//                    new DCNv2Plugin(in_channel,out_channel,kernel_H,kernel_W,deformable_group,
+//                            dilation,groups,padding,stride, kernel_weights, bias_weights),
+//                    {&inputs.at(0).tensor(),&inputs.at(1).tensor(),&inputs.at(2).tensor()}));
+//}
 
 } // namespace
 
